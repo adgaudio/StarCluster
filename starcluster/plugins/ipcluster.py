@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 """
 A starcluster plugin for running an IPython cluster
 (requires IPython 0.13+)
@@ -255,7 +272,9 @@ class IPCluster(DefaultClusterSetup):
         if not port_open:
             log.info("Authorizing tcp ports [%s-%s] on %s for: %s" %
                      (port_min, port_max, world_cidr, service_name))
-            group.authorize('tcp', port_min, port_max, world_cidr)
+            node.ec2.conn.authorize_security_group(
+                group_id=group.id, ip_protocol='tcp', from_port=port_min,
+                to_port=port_max, cidr_ip=world_cidr)
 
     @print_timing("IPCluster")
     def run(self, nodes, master, user, user_shell, volumes):

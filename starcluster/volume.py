@@ -1,8 +1,25 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 import time
 import string
 
-from starcluster import static
 from starcluster import utils
+from starcluster import static
 from starcluster import exception
 from starcluster import cluster
 from starcluster.utils import print_timing
@@ -45,7 +62,7 @@ class VolumeCreator(cluster.Cluster):
             ec2_conn=ec2_conn, spot_bid=spot_bid, keyname=keypair,
             key_location=key_location, cluster_tag=static.VOLUME_GROUP_NAME,
             cluster_size=1, cluster_user="sgeadmin", cluster_shell="bash",
-            node_image_id=self._image_id,
+            node_image_id=self._image_id, subnet_id=kwargs.get('subnet_id'),
             node_instance_type=self._instance_type, force_spot_master=True)
 
     def __repr__(self):
@@ -79,10 +96,10 @@ class VolumeCreator(cluster.Cluster):
                                           instance_type=self._instance_type,
                                           zone=zone)
             self.wait_for_cluster(msg="Waiting for volume host to come up...")
-            self._instance = self.get_node_by_alias(alias)
+            self._instance = self.get_node(alias)
         else:
-            s = self.get_spinner("Waiting for instance %s to come up..." %
-                                 self._instance.id)
+            s = utils.get_spinner("Waiting for instance %s to come up..." %
+                                  self._instance.id)
             while not self._instance.is_up():
                 time.sleep(self.refresh_interval)
             s.stop()
@@ -216,7 +233,7 @@ class VolumeCreator(cluster.Cluster):
                                sg.instances())
         if self._instance:
             vol_hosts.append(self._instance)
-        vol_hosts = map(lambda x: x.id, vol_hosts)
+        vol_hosts = list(set([h.id for h in vol_hosts]))
         if vol_hosts:
             log.warn("There are still volume hosts running: %s" %
                      ', '.join(vol_hosts))
@@ -254,8 +271,9 @@ class VolumeCreator(cluster.Cluster):
         newvol = self._volume
         if newvol:
             log.error("Detaching and deleting *new* volume: %s" % newvol.id)
-            newvol.detach(force=True)
-            self.ec2.wait_for_volume(newvol, status='available')
+            if newvol.update() != 'available':
+                newvol.detach(force=True)
+                self.ec2.wait_for_volume(newvol, status='available')
             newvol.delete()
             self._volume = None
 
@@ -286,7 +304,7 @@ class VolumeCreator(cluster.Cluster):
                      (volume_size, vol.id))
             return vol
         except Exception:
-            log.error("Failed to create new volume")
+            log.error("Failed to create new volume", exc_info=True)
             self._delete_new_volume()
             raise
         finally:

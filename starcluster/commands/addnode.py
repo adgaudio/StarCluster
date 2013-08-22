@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 from starcluster import static
 from completers import ClusterCompleter
 
@@ -67,7 +84,7 @@ class CmdAddNode(ClusterCompleter):
         parser.add_option(
             "-I", "--instance-type", dest="instance_type",
             action="store", type="choice", default=None,
-            choices=static.INSTANCE_TYPES.keys(),
+            choices=sorted(static.INSTANCE_TYPES.keys()),
             help="The instance type to use when launching volume "
             "host instance")
         parser.add_option(
@@ -82,24 +99,16 @@ class CmdAddNode(ClusterCompleter):
             default=False, help="do not launch new EC2 instances when "
             "adding nodes (use existing instances instead)")
 
-    def _get_duplicate(self, lst):
-        d = {}
-        for item in lst:
-            if item in d:
-                return item
-            else:
-                d[item] = 0
-
     def execute(self, args):
         if len(args) != 1:
             self.parser.error("please specify a cluster <cluster_tag>")
         tag = self.tag = args[0]
-
         aliases = []
         for alias in self.opts.alias:
             aliases.extend(alias.split(','))
-        if 'master' in aliases:
-            self.parser.error("'master' is a reserved alias")
+        if ('master' in aliases) or ('%s-master' % tag in aliases):
+            self.parser.error(
+                "'master' and '%s-master' are reserved aliases" % tag)
         num_nodes = self.opts.num_nodes
         if num_nodes == 1 and aliases:
             num_nodes = len(aliases)

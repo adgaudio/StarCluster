@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 import sys
 from completers import NodeCompleter
 
@@ -36,6 +53,10 @@ class CmdSshNode(NodeCompleter):
         parser.add_option("-A", "--forward-agent", dest="forward_agent",
                           action="store_true", default=False,
                           help="enable authentication agent forwarding")
+        parser.add_option("-t", "--pseudo-tty", dest="pseudo_tty",
+                          action="store_true", default=False,
+                          help="enable pseudo-tty allocation (for interactive "
+                          "commands and screens)")
 
     def execute(self, args):
         if len(args) < 2:
@@ -44,10 +65,9 @@ class CmdSshNode(NodeCompleter):
         scluster = args[0]
         node = args[1]
         cmd = ' '.join(args[2:])
-        retval = self.cm.ssh_to_cluster_node(scluster, node,
-                                             user=self.opts.user, command=cmd,
-                                             forward_x11=self.opts.forward_x11,
-                                             forward_agent=
-                                             self.opts.forward_agent)
+        retval = self.cm.ssh_to_cluster_node(
+            scluster, node, user=self.opts.user, command=cmd,
+            forward_x11=self.opts.forward_x11, pseudo_tty=self.opts.pseudo_tty,
+            forward_agent=self.opts.forward_agent)
         if cmd and retval is not None:
             sys.exit(retval)

@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 """
 StarCluster Exception Classes
 """
@@ -102,6 +119,11 @@ class InstanceNotRunning(AWSError):
         self.msg = "%s %s is not running (%s)" % (label, instance_id, state)
 
 
+class SubnetDoesNotExist(AWSError):
+    def __init__(self, subnet_id):
+        self.msg = "subnet does not exist: %s" % subnet_id
+
+
 class SecurityGroupDoesNotExist(AWSError):
     def __init__(self, sg_name):
         self.msg = "security group %s does not exist" % sg_name
@@ -110,6 +132,11 @@ class SecurityGroupDoesNotExist(AWSError):
 class PlacementGroupDoesNotExist(AWSError):
     def __init__(self, pg_name):
         self.msg = "placement group %s does not exist" % pg_name
+
+
+class KeyPairAlreadyExists(AWSError):
+    def __init__(self, keyname):
+        self.msg = "keypair %s already exists" % keyname
 
 
 class KeyPairDoesNotExist(AWSError):
@@ -189,9 +216,17 @@ class SpotHistoryError(AWSError):
         self.msg += "%s - %s" % (start, end)
 
 
+class PropagationException(AWSError):
+    pass
+
+
 class InvalidIsoDate(BaseException):
     def __init__(self, date):
         self.msg = "Invalid date specified: %s" % date
+
+
+class InvalidHostname(BaseException):
+    pass
 
 
 class ConfigError(BaseException):
@@ -305,9 +340,11 @@ class NoClusterNodesFound(ValidationError):
         self.msg += "\n\nBelow is a list of terminated instances:\n"
         for tnode in terminated:
             id = tnode.id
-            reason = tnode.reason or 'N/A'
-            state = tnode.state or 'N/A'
-            self.msg += "\n%s (state: %s, reason: %s)" % (id, state, reason)
+            reason = 'N/A'
+            if tnode.state_reason:
+                reason = tnode.state_reason['message']
+            state = tnode.state
+            self.msg += "\n%s (%s) %s" % (id, state, reason)
 
 
 class NoClusterSpotRequests(ValidationError):
@@ -496,39 +533,39 @@ class ThreadPoolException(BaseException):
 
 
 class IncompatibleCluster(BaseException):
-    main_msg = """\
-The cluster '%(tag)s' was either created by a previous stable or development \
-version of StarCluster or you manually created the '%(group)s' group. In any \
-case '%(tag)s' cannot be used with this version of StarCluster (%(version)s).
+    default_msg = """\
+INCOMPATIBLE CLUSTER: %(tag)s
 
-"""
+The cluster '%(tag)s' is not compatible with StarCluster %(version)s. \
+Possible reasons are:
 
-    insts_msg = """\
+1. The '%(group)s' group was created using an incompatible version of \
+StarCluster (stable or development).
+
+2. The '%(group)s' group was manually created outside of StarCluster.
+
+3. One of the nodes belonging to '%(group)s' was manually created outside of \
+StarCluster.
+
+4. StarCluster was interrupted very early on when first creating the \
+cluster's security group.
+
+In any case '%(tag)s' and its nodes cannot be used with this version of \
+StarCluster (%(version)s).
+
 The cluster '%(tag)s' currently has %(num_nodes)d active nodes.
 
-"""
-
-    no_insts_msg = """\
-The cluster '%(tag)s' does not have any nodes and is safe to terminate.
-
-"""
-
-    terminate_msg = """\
 Please terminate the cluster using:
 
-    $ starcluster terminate -f %(tag)s
+    $ starcluster terminate --force %(tag)s
 """
 
     def __init__(self, group):
-        tag = group.name.replace(static.SECURITY_GROUP_PREFIX + '-', '')
-        self.msg = "Incompatible Cluster: %(tag)s\n\n" % dict(tag=tag)
-        self.msg += self.main_msg % dict(group=group.name, tag=tag,
-                                         version=static.VERSION)
+        tag = group.name.replace(static.SECURITY_GROUP_PREFIX, '')
         states = ['pending', 'running', 'stopping', 'stopped']
-        insts = filter(lambda x: x.state in states, group.instances())
-        ctx = dict(tag=tag, num_nodes=len(insts))
-        if insts:
-            self.msg += self.insts_msg % ctx
-        else:
-            self.msg += self.no_insts_msg % ctx
-        self.msg += self.terminate_msg % ctx
+        insts = group.connection.get_all_instances(
+            filters={'instance-state-name': states,
+                     'instance.group-name': group.name})
+        ctx = dict(group=group.name, tag=tag, num_nodes=len(insts),
+                   version=static.VERSION)
+        self.msg = self.default_msg % ctx

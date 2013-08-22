@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 import re
 import time
 import stat
@@ -64,8 +81,9 @@ class Node(object):
     """
     def __init__(self, instance, key_location, alias=None, user='root'):
         self.instance = instance
-        self.ec2 = awsutils.EasyEC2(None, None)
-        self.ec2._conn = instance.connection
+        self.ec2 = awsutils.EasyEC2(instance.connection.aws_access_key_id,
+                                    instance.connection.aws_secret_access_key,
+                                    connection=instance.connection)
         self.key_location = key_location
         self.user = user
         self._alias = alias
@@ -118,7 +136,7 @@ class Node(object):
         if not self._alias:
             alias = self.tags.get('alias')
             if not alias:
-                aliasestxt = self.user_data.get(static.UD_ALIASES_FNAME)
+                aliasestxt = self.user_data.get(static.UD_ALIASES_FNAME, '')
                 aliases = aliasestxt.splitlines()[2:]
                 index = self.ami_launch_index
                 try:
@@ -315,8 +333,40 @@ class Node(object):
         return self.instance.region
 
     @property
+    def vpc_id(self):
+        return self.instance.vpc_id
+
+    @property
+    def subnet_id(self):
+        return self.instance.subnet_id
+
+    @property
     def root_device_name(self):
-        return self.instance.root_device_name
+        root_dev = self.instance.root_device_name
+        bmap = self.block_device_mapping
+        if bmap and root_dev not in bmap and self.is_ebs_backed():
+            # Hack for misconfigured AMIs (e.g. CentOS 6.3 Marketplace) These
+            # AMIs have root device name set to /dev/sda1 but no /dev/sda1 in
+            # block device map - only /dev/sda. These AMIs somehow magically
+            # work so check if /dev/sda exists and return that instead to
+            # prevent detach_external_volumes() from trying to detach the root
+            # volume on these AMIs.
+            log.warn("Root device %s is not in the block device map" %
+                     root_dev)
+            log.warn("This means the AMI was registered with either "
+                     "an incorrect root device name or an incorrect block "
+                     "device mapping")
+            sda, sda1 = '/dev/sda', '/dev/sda1'
+            if root_dev == sda1:
+                log.info("Searching for possible root device: %s" % sda)
+                if sda in self.block_device_mapping:
+                    log.warn("Found '%s' - assuming its the real root device" %
+                             sda)
+                    root_dev = sda
+                else:
+                    log.warn("Device %s isn't in the block device map either" %
+                             sda)
+        return root_dev
 
     @property
     def root_device_type(self):
@@ -464,8 +514,8 @@ class Node(object):
             log.debug("Using existing key: %s" % private_key)
             key = self.ssh.load_remote_rsa_key(private_key)
         else:
-            key = self.ssh.generate_rsa_key()
-        pubkey_contents = self.ssh.get_public_key(key)
+            key = sshutils.generate_rsa_key()
+        pubkey_contents = sshutils.get_public_key(key)
         if not key_exists or ignore_existing:
             # copy public key to remote machine
             pub_key = self.ssh.remote_file(public_key, 'w')
@@ -496,7 +546,7 @@ class Node(object):
             # add public key used to create the connection to user's
             # authorized_keys
             conn_key = self.ssh._pkey
-            conn_pubkey_contents = self.ssh.get_public_key(conn_key)
+            conn_pubkey_contents = sshutils.get_public_key(conn_key)
             if conn_pubkey_contents not in auth_keys_contents:
                 log.debug("adding conn_pubkey_contents")
                 auth_keys.write('%s\n' % conn_pubkey_contents)
@@ -515,10 +565,10 @@ class Node(object):
         """
         user = self.getpwnam(username)
         known_hosts_file = posixpath.join(user.pw_dir, '.ssh', 'known_hosts')
-        self.remove_from_known_hosts(username, nodes)
         khosts = []
         if add_self and self not in nodes:
             nodes.append(self)
+        self.remove_from_known_hosts(username, nodes)
         for node in nodes:
             server_pkey = node.ssh.get_server_public_key()
             node_names = {}.fromkeys([node.alias, node.private_dns_name,
@@ -619,7 +669,8 @@ class Node(object):
         $ node.export_fs_to_nodes(nodes=[node1,node2],
                                   export_paths=['/home', '/opt/sge6'])
         """
-        # setup /etc/exports
+        log.debug("Cleaning up potentially stale NFS entries")
+        self.stop_exporting_fs_to_nodes(nodes, paths=export_paths)
         log.info("Configuring NFS exports path(s):\n%s" %
                  ' '.join(export_paths))
         nfs_export_settings = "(async,no_root_squash,no_subtree_check,rw)"
@@ -636,7 +687,7 @@ class Node(object):
         etc_exports.close()
         self.ssh.execute('exportfs -fra')
 
-    def stop_exporting_fs_to_nodes(self, nodes):
+    def stop_exporting_fs_to_nodes(self, nodes, paths=None):
         """
         Removes nodes from this node's /etc/exportfs
 
@@ -645,17 +696,34 @@ class Node(object):
         Example:
         $ node.remove_export_fs_to_nodes(nodes=[node1,node2])
         """
-        regex = '|'.join(map(lambda x: x.alias, nodes))
+        if paths:
+            regex = '|'.join([' '.join([path, node.alias]) for path in paths
+                              for node in nodes])
+        else:
+            regex = '|'.join([n.alias for n in nodes])
         self.ssh.remove_lines_from_file('/etc/exports', regex)
         self.ssh.execute('exportfs -fra')
 
     def start_nfs_server(self):
         log.info("Starting NFS server on %s" % self.alias)
-        self.ssh.execute('/etc/init.d/portmap start')
+        self.ssh.execute('/etc/init.d/portmap start', ignore_exit_status=True)
         self.ssh.execute('mount -t rpc_pipefs sunrpc /var/lib/nfs/rpc_pipefs/',
                          ignore_exit_status=True)
+        EXPORTSD = '/etc/exports.d'
+        DUMMY_EXPORT_DIR = '/dummy_export_for_broken_init_script'
+        DUMMY_EXPORT_LINE = ' '.join([DUMMY_EXPORT_DIR,
+                                      '127.0.0.1(ro,no_subtree_check)'])
+        DUMMY_EXPORT_FILE = posixpath.join(EXPORTSD, 'dummy.exports')
+        # Hack to get around broken debian nfs-kernel-server script
+        # http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=679274
+        self.ssh.execute("mkdir -p %s" % EXPORTSD)
+        self.ssh.execute("mkdir -p %s" % DUMMY_EXPORT_DIR)
+        with self.ssh.remote_file(DUMMY_EXPORT_FILE, 'w') as dummyf:
+            dummyf.write(DUMMY_EXPORT_LINE)
         self.ssh.execute('/etc/init.d/nfs start')
-        self.ssh.execute('/usr/sbin/exportfs -fra')
+        self.ssh.execute('rm -f %s' % DUMMY_EXPORT_FILE)
+        self.ssh.execute('rm -rf %s' % DUMMY_EXPORT_DIR)
+        self.ssh.execute('exportfs -fra')
 
     def mount_nfs_shares(self, server_node, remote_paths):
         """
@@ -684,9 +752,10 @@ class Node(object):
                                           remote_paths))
         self.ssh.remove_lines_from_file('/etc/fstab', remote_paths_regex)
         fstab = self.ssh.remote_file('/etc/fstab', 'a')
+        mount_opts = 'rw,exec,noauto'
         for path in remote_paths:
-            fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto 0 0\n' %
-                        (server_node.alias, path, path))
+            fstab.write('%s:%s %s nfs %s 0 0\n' %
+                        (server_node.alias, path, path, mount_opts))
         fstab.close()
         for path in remote_paths:
             if not self.ssh.path_exists(path):
@@ -704,47 +773,32 @@ class Node(object):
     def get_device_map(self):
         """
         Returns a dictionary mapping devices->(# of blocks) based on
-        /proc/partitions
+        'fdisk -l' and /proc/partitions
         """
-        parts = self.ssh.remote_file('/proc/partitions', 'r').read()
-        dev_regex = '(?:xv|s)d[a-z]'
-        part_regex = '\d+(?:p\d+)?'
-        r = re.compile('(\d+)\s+(%s)(%s)?(?:\s+|\\n)' %
-                       (dev_regex, part_regex))
-        entries = r.findall(parts)
+        dev_regex = '/dev/[A-Za-z0-9/]+'
+        r = re.compile('Disk (%s):' % dev_regex)
+        fdiskout = '\n'.join(self.ssh.execute("fdisk -l 2>/dev/null"))
+        proc_parts = '\n'.join(self.ssh.execute("cat /proc/partitions"))
         devmap = {}
-        partmap = {}
-        for blocks, root_dev_name, partition in entries:
-            root_dev_file = '/dev/' + root_dev_name
-            devfile = root_dev_file + partition
-            if self.ssh.path_exists(devfile):
-                blocks = int(blocks)
-                if partition:
-                    partmap[devfile] = (root_dev_file, blocks)
-                else:
-                    devmap[devfile] = blocks
-        # check for devices attached to the instance with a partition's naming
-        # scheme (e.g. /dev/xvdb1)
-        for dev in partmap:
-            root_dev_file, blocks = partmap[dev]
-            # if a device exists with a partition naming scheme, then the root
-            # device name, e.g. /dev/xvdb for /dev/xvdb1, will not exist
-            if not root_dev_file in devmap:
-                devmap[dev] = blocks
+        for dev in r.findall(fdiskout):
+            short_name = dev.replace('/dev/', '')
+            r = re.compile("(\d+)\s+%s(?:\s+|$)" % short_name)
+            devmap[dev] = int(r.findall(proc_parts)[0])
         return devmap
 
-    def get_partition_map(self):
+    def get_partition_map(self, device=None):
         """
         Returns a dictionary mapping partitions->(start, end, blocks, id) based
         on 'fdisk -l'
         """
-        fdiskout = '\n'.join(self.ssh.execute("fdisk -l 2>/dev/null"))
-        part_regex = '/dev/(?:xv|s)d[a-z]\d+(?:p\d+)?'
-        r = re.compile('(%s)\s+'
+        fdiskout = '\n'.join(self.ssh.execute("fdisk -l %s 2>/dev/null" %
+                                              (device or '')))
+        part_regex = '/dev/[A-Za-z0-9/]+'
+        r = re.compile('(%s)\s+\*?\s+'
                        '(\d+)(?:[-+])?\s+'
                        '(\d+)(?:[-+])?\s+'
                        '(\d+)(?:[-+])?\s+'
-                       '(\d+)(?:[-+])?' % part_regex)
+                       '([\da-fA-F][\da-fA-F]?)' % part_regex)
         partmap = {}
         for match in r.findall(fdiskout):
             part, start, end, blocks, sys_id = match
@@ -793,7 +847,16 @@ class Node(object):
         hostname_file = self.ssh.remote_file("/etc/hostname", "w")
         hostname_file.write(hostname)
         hostname_file.close()
-        self.ssh.execute('hostname -F /etc/hostname')
+        try:
+            self.ssh.execute('hostname -F /etc/hostname')
+        except:
+            if not utils.is_valid_hostname(hostname):
+                raise exception.InvalidHostname(
+                    "Please terminate and recreate this cluster with a name"
+                    " that is also a valid hostname.  This hostname is"
+                    " invalid: %s" % hostname)
+            else:
+                raise
 
     @property
     def network_names(self):
@@ -815,8 +878,9 @@ class Node(object):
         attached_vols.update(self.block_device_mapping)
         if self.is_ebs_backed():
             # exclude the root device from the list
-            if self.root_device_name in attached_vols:
-                attached_vols.pop(self.root_device_name)
+            root_dev = self.root_device_name
+            if root_dev in attached_vols:
+                attached_vols.pop(root_dev)
         return attached_vols
 
     def detach_external_volumes(self):
@@ -858,7 +922,7 @@ class Node(object):
             return spot[0]
 
     def is_master(self):
-        return self.alias == "master"
+        return self.alias == 'master' or self.alias.endswith("-master")
 
     def is_instance_store(self):
         return self.instance.root_device_type == "instance-store"
@@ -873,7 +937,7 @@ class Node(object):
         return self.instance.instance_type in static.CLUSTER_GPU_TYPES
 
     def is_cluster_type(self):
-        return self.instance.instance_type in static.CLUSTER_TYPES
+        return self.instance.instance_type in static.HVM_ONLY_TYPES
 
     def is_spot(self):
         return self.spot_id is not None
@@ -922,6 +986,9 @@ class Node(object):
         will also destroy the node's EBS root device. Puts this node
         into a 'terminated' state.
         """
+        if self.spot_id:
+            log.info("Canceling spot request %s" % self.spot_id)
+            self.get_spot_request().cancel()
         log.info("Terminating node: %s (%s)" % (self.alias, self.id))
         return self.instance.terminate()
 
@@ -980,15 +1047,31 @@ class Node(object):
         return self.state
 
     @property
+    def addr(self):
+        """
+        Returns the most widely accessible address for the instance. This
+        property first checks if dns_name is available, then the public ip, and
+        finally the private ip. If none of these addresses are available it
+        returns None.
+        """
+        if not self.dns_name:
+            if self.ip_address:
+                return self.ip_address
+            else:
+                return self.private_ip_address
+        else:
+            return self.dns_name
+
+    @property
     def ssh(self):
         if not self._ssh:
-            self._ssh = sshutils.SSHClient(self.instance.dns_name,
+            self._ssh = sshutils.SSHClient(self.addr,
                                            username=self.user,
                                            private_key=self.key_location)
         return self._ssh
 
     def shell(self, user=None, forward_x11=False, forward_agent=False,
-              command=None):
+              pseudo_tty=False, command=None):
         """
         Attempts to launch an interactive shell by first trying the system's
         ssh client. If the system does not have the ssh command it falls back
@@ -1016,8 +1099,10 @@ class Node(object):
                 sshopts += ' -Y'
             if forward_agent:
                 sshopts += ' -A'
+            if pseudo_tty:
+                sshopts += ' -t'
             ssh_cmd = static.SSH_TEMPLATE % dict(opts=sshopts, user=user,
-                                                 host=self.dns_name)
+                                                 host=self.addr)
             if command:
                 command = "'source /etc/profile && %s'" % command
                 ssh_cmd = ' '.join([ssh_cmd, command])
@@ -1029,6 +1114,9 @@ class Node(object):
                 log.warn("X11 Forwarding not available in Python SSH client")
             if forward_agent:
                 log.warn("Authentication agent forwarding not available in " +
+                         "Python SSH client")
+            if pseudo_tty:
+                log.warn("Pseudo-tty allocation is not available in " +
                          "Python SSH client")
             if command:
                 orig_user = self.ssh.get_current_user()
@@ -1061,6 +1149,7 @@ class Node(object):
         pkgs is a string that contains one or more packages separated by a
         space
         """
+        self.apt_command('update')
         self.apt_command('install %s' % pkgs)
 
     def yum_command(self, cmd):
@@ -1088,7 +1177,7 @@ class Node(object):
         /usr/bin/apt exists on the node, and use apt if it exists. Otherwise
         test to see if /usr/bin/yum exists and use that.
         """
-        if self.ssh.isfile('/usr/bin/apt'):
+        if self.ssh.isfile('/usr/bin/apt-get'):
             return "apt"
         elif self.ssh.isfile('/usr/bin/yum'):
             return "yum"

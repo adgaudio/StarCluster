@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 import os
 import copy
 import tempfile
@@ -237,6 +254,8 @@ class TestStarClusterConfig(tests.StarClusterTest):
         cfg = config.StarClusterConfig(tmp_file.name, cache=True).load()
         assert cfg.aws['aws_access_key_id'] == aws_key
         assert cfg.aws['aws_secret_access_key'] == aws_secret_key
+        del os.environ['AWS_ACCESS_KEY_ID']
+        del os.environ['AWS_SECRET_ACCESS_KEY']
 
     def test_cyclical_extends(self):
         """

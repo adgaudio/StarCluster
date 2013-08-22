@@ -1,13 +1,32 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 import os
 import sys
 import time
+
 from starcluster import node
+from starcluster import utils
 from starcluster import cluster
-from starcluster import optcomplete
+from starcluster import completion
 from starcluster.logger import log
 
 
-class CmdBase(optcomplete.CmdComplete):
+class CmdBase(completion.CmdComplete):
     """
     Base class for StarCluster commands
 
@@ -153,11 +172,28 @@ class CmdBase(optcomplete.CmdComplete):
             parser.error("option %s must be a positive integer" % opt_str)
         setattr(parser.values, option.dest, value)
 
+    def _iso_timestamp(self, option, opt_str, value, parser):
+        if not utils.is_iso_time(value):
+            parser.error("option %s must be an iso8601 formatted timestamp" %
+                         opt_str)
+        setattr(parser.values, option.dest, value)
+
+    def _file_exists(self, option, opt_str, value, parser):
+        path = os.path.abspath(os.path.expanduser(os.path.expandvars(value)))
+        if not os.path.exists(path):
+            parser.error("(%s) file does not exist: %s" % (opt_str, path))
+        if not os.path.isfile(path):
+            parser.error("(%s) path is not a file: %s" % (opt_str, path))
+        setattr(parser.values, option.dest, path)
+
     def _build_dict(self, option, opt_str, value, parser):
         tagdict = getattr(parser.values, option.dest)
         tags = value.split(',')
         for tag in tags:
             tagparts = tag.split('=')
+            if len(tagparts) != 2:
+                parser.error("invalid tag: '%s' (correct example: key=value)" %
+                             tag)
             key = tagparts[0]
             if not key:
                 continue
@@ -173,3 +209,11 @@ class CmdBase(optcomplete.CmdComplete):
                 tagstore = value
             tagdict[key] = tagstore
         setattr(parser.values, option.dest, tagdict)
+
+    def _get_duplicate(self, lst):
+        d = {}
+        for item in lst:
+            if item in d:
+                return item
+            else:
+                d[item] = 0

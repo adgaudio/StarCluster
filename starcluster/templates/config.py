@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 from starcluster import static
 
 config_template = """\
@@ -83,15 +100,26 @@ CLUSTER_USER = sgeadmin
 # optionally specify shell (defaults to bash)
 # (options: %(shells)s)
 CLUSTER_SHELL = bash
+# Uncomment to prepent the cluster tag to the dns name of all nodes created
+# using this cluster config.  ie: mycluster-master and mycluster-node001
+# If you choose to enable this option, it's recommended that you enable it in
+# the DEFAULT_TEMPLATE so all nodes will automatically have the prefix
+# DNS_PREFIX = True
 # AMI to use for cluster nodes. These AMIs are for the us-east-1 region.
 # Use the 'listpublic' command to list StarCluster AMIs in other regions
 # The base i386 StarCluster AMI is %(x86_ami)s
 # The base x86_64 StarCluster AMI is %(x86_64_ami)s
 # The base HVM StarCluster AMI is %(hvm_ami)s
-NODE_IMAGE_ID = %(x86_ami)s
+NODE_IMAGE_ID = %(x86_64_ami)s
 # instance type for all cluster nodes
 # (options: %(instance_types)s)
 NODE_INSTANCE_TYPE = m1.small
+# Launch cluster in a VPC subnet (OPTIONAL)
+#SUBNET_ID=subnet-99999999
+# Do not assign public IPs to cluster nodes (VPC-ONLY) (OPTIONAL)
+# WARNING: You must be on a machine within the VPC in order for StarCluster to
+# connect to the cluster if PUBLIC_IPS is set to False
+#PUBLIC_IPS=False
 # Uncomment to disable installing/configuring a queueing system on the
 # cluster (SGE)
 #DISABLE_QUEUE=True
@@ -100,7 +128,7 @@ NODE_INSTANCE_TYPE = m1.small
 #MASTER_INSTANCE_TYPE = m1.small
 # Uncomment to specify a separate AMI to use for the master node. (OPTIONAL)
 # (defaults to NODE_IMAGE_ID if not specified)
-#MASTER_IMAGE_ID = %(x86_ami)s (OPTIONAL)
+#MASTER_IMAGE_ID = %(x86_64_ami)s (OPTIONAL)
 # availability zone to launch the cluster in (OPTIONAL)
 # (automatically determined based on volumes (if any) or
 # selected by Amazon if not specified)
@@ -122,6 +150,10 @@ NODE_INSTANCE_TYPE = m1.small
 # this template. The following example will place a $0.50 bid for each spot
 # request.
 #SPOT_BID = 0.50
+# Uncomment to specify one or more userdata scripts to use when launching
+# cluster instances. Supports cloudinit. All scripts combined must be less than
+# 16KB
+#USERDATA_SCRIPTS = /path/to/script1, /path/to/script2
 
 ###########################################
 ## Defining Additional Cluster Templates ##
@@ -187,32 +219,32 @@ NODE_INSTANCE_TYPE = m1.small
 ## Configuring Security Group Permissions ##
 ############################################
 # Sections starting with "permission" define security group rules to
-# automatically apply to newly created clusters. PROTOCOL in the following
+# automatically apply to newly created clusters. IP_PROTOCOL in the following
 # examples can be can be: tcp, udp, or icmp. CIDR_IP defaults to 0.0.0.0/0 or
 # "open to the # world"
 
 # open port 80 on the cluster to the world
 # [permission http]
-# PROTOCOL = tcp
+# IP_PROTOCOL = tcp
 # FROM_PORT = 80
 # TO_PORT = 80
 
 # open https on the cluster to the world
 # [permission https]
-# PROTOCOL = tcp
+# IP_PROTOCOL = tcp
 # FROM_PORT = 443
 # TO_PORT = 443
 
 # open port 80 on the cluster to an ip range using CIDR_IP
 # [permission http]
-# PROTOCOL = tcp
+# IP_PROTOCOL = tcp
 # FROM_PORT = 80
 # TO_PORT = 80
 # CIDR_IP = 18.0.0.0/8
 
 # restrict ssh access to a single ip address (<your_ip>)
 # [permission ssh]
-# PROTOCOL = tcp
+# IP_PROTOCOL = tcp
 # FROM_PORT = 22
 # TO_PORT = 22
 # CIDR_IP = <your_ip>/32

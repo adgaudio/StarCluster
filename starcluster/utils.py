@@ -1,3 +1,20 @@
+# Copyright 2009-2013 Justin Riley
+#
+# This file is part of StarCluster.
+#
+# StarCluster is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# StarCluster is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
+
 """
 Utils module for StarCluster
 """
@@ -16,34 +33,37 @@ import cPickle
 import StringIO
 import calendar
 import urlparse
-import decorator
 from datetime import datetime
 
-from starcluster import iptools
+import iptools
+import iso8601
+import decorator
+
+from starcluster import spinner
 from starcluster import exception
 from starcluster.logger import log
 
-try:
-    import IPython
-    if IPython.__version__ < '0.11':
-        from IPython.Shell import IPShellEmbed
-        ipy_shell = IPShellEmbed(argv=[])
-    else:
-        from IPython import embed
-        ipy_shell = lambda local_ns=None: embed(user_ns=local_ns)
-except ImportError, e:
 
-    def ipy_shell(local_ns=None):
+def ipy_shell(local_ns=None):
+    try:
+        import IPython
+        if IPython.__version__ < '0.11':
+            from IPython.Shell import IPShellEmbed
+            return IPShellEmbed(argv=[])(local_ns)
+        else:
+            from IPython import embed
+            return embed(user_ns=local_ns)
+    except ImportError as e:
         log.error("Unable to load IPython:\n\n%s\n" % e)
         log.error("Please check that IPython is installed and working.")
         log.error("If not, you can install it via: easy_install ipython")
 
-try:
-    import pudb
-    set_trace = pudb.set_trace
-except ImportError:
 
-    def set_trace():
+def set_trace():
+    try:
+        import pudb
+        return pudb.set_trace()
+    except ImportError:
         log.error("Unable to load PuDB")
         log.error("Please check that PuDB is installed and working.")
         log.error("If not, you can install it via: easy_install pudb")
@@ -68,16 +88,16 @@ def print_timing(msg=None, debug=False):
     appear in the sentence "[msg] took XXX mins". If no msg is specified,
     msg will default to the decorated function's name. e.g:
 
-    @print_timing
-    def myfunc():
-        print 'Running myfunc'
+    >>> @print_timing
+    ... def myfunc():
+    ...     print 'Running myfunc'
     >>> myfunc()
     Running myfunc
     myfunc took 0.000 mins
 
-    @print_timing('My function')
-    def myfunc():
-        print 'Running myfunc'
+    >>> @print_timing('My function')
+    ... def myfunc():
+    ...    print 'Running myfunc'
     >>> myfunc()
     Running myfunc
     My function took 0.000 mins
@@ -141,7 +161,7 @@ def is_valid_bucket_name(bucket_name):
     regex = re.compile('[a-z0-9][a-z0-9\._-]{2,254}$')
     if not regex.match(bucket_name):
         return False
-    if iptools.validate_ip(bucket_name):
+    if iptools.ipv4.validate_ip(bucket_name):
         return False
     return True
 
@@ -158,6 +178,20 @@ def is_valid_image_name(image_name):
         return regex.match(image_name) is not None
     except TypeError:
         return False
+
+
+def is_valid_hostname(hostname):
+    """From StackOverflow on 2013-10-04:
+
+    http://stackoverflow.com
+    /questions/2532053/validate-a-hostname-string#answer-2532344
+    """
+    if len(hostname) > 255:
+        return False
+    if hostname[-1] == ".":
+        hostname = hostname[:-1]  # strip exactly one dot from the right
+    allowed = re.compile("(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
+    return all(allowed.match(x) for x in hostname.split("."))
 
 
 def make_one_liner(script):
@@ -205,7 +239,7 @@ def is_iso_time(iso):
     try:
         iso_to_datetime_tuple(iso)
         return True
-    except ValueError:
+    except iso8601.ParseError:
         return False
 
 
@@ -213,20 +247,26 @@ def iso_to_datetime_tuple(iso):
     """
     Converts an iso time string to a datetime tuple
     """
-    #remove timezone
-    iso = iso.split('.')[0]
-    try:
-        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%S")
-    except AttributeError:
-        # python2.4 datetime module doesnt have strptime
-        return datetime(*time.strptime(iso, "%Y-%m-%dT%H:%M:%S")[:6])
+    return iso8601.parse_date(iso)
+
+
+def get_utc_now(iso=False):
+    """
+    Returns datetime.utcnow with UTC timezone info
+    """
+    now = datetime.utcnow().replace(tzinfo=iso8601.iso8601.UTC)
+    if iso:
+        return datetime_tuple_to_iso(now)
+    else:
+        return now
 
 
 def datetime_tuple_to_iso(tup):
     """
-    Converts a datetime tuple to iso time string
+    Converts a datetime tuple to a UTC iso time string
     """
-    iso = datetime.strftime(tup, "%Y-%m-%dT%H:%M:%S")
+    iso = datetime.strftime(tup.astimezone(iso8601.iso8601.UTC),
+                            "%Y-%m-%dT%H:%M:%S.%fZ")
     return iso
 
 
@@ -553,14 +593,18 @@ class struct_passwd(tuple):
             raise AttributeError
 
 
-def dump_compress_encode(obj, use_json=False):
+def dump_compress_encode(obj, use_json=False, chunk_size=None):
     serializer = cPickle
     if use_json:
         serializer = json
-    return zlib.compress(serializer.dumps(obj)).encode('base64')
+    p = zlib.compress(serializer.dumps(obj)).encode('base64')
+    if chunk_size is not None:
+        return [p[i:i + chunk_size] for i in range(0, len(p), chunk_size)]
+    return p
 
 
 def decode_uncompress_load(string, use_json=False):
+    string = ''.join(string)
     serializer = cPickle
     if use_json:
         serializer = json
@@ -588,3 +632,20 @@ def get_fq_class_name(obj):
 
 def size_in_kb(obj):
     return sys.getsizeof(obj) / 1024.
+
+
+def get_spinner(msg):
+    """
+    Logs a status msg, starts a spinner, and returns the spinner object.
+    This is useful for long running processes:
+
+    s = get_spinner("Long running process running...")
+    try:
+        (do something)
+    finally:
+        s.stop()
+    """
+    s = spinner.Spinner()
+    log.info(msg, extra=dict(__nonewline__=True))
+    s.start()
+    return s
