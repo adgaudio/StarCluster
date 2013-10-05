@@ -204,7 +204,8 @@ class ClusterManager(managers.Manager):
                             placement_group=placement_group, spot_bid=spot_bid,
                             no_create=no_create)
 
-    def remove_node(self, cluster_name, alias, terminate=True, template=None):
+    def remove_node(self, cluster_name, alias, terminate=True, template=None,
+                    force=False):
         """
         Remove a single node from a cluster
         """
@@ -214,7 +215,7 @@ class ClusterManager(managers.Manager):
         n = cl.get_node_by_alias(alias)
         if not n:
             raise exception.InstanceDoesNotExist(alias, label='node')
-        cl.remove_node(n, terminate=terminate)
+        cl.remove_node(n, terminate=terminate, force=force)
 
     def restart_cluster(self, cluster_name):
         """
@@ -987,21 +988,25 @@ class Cluster(object):
             node = self.get_node_by_alias(alias)
             self.run_plugins(method_name="on_add_node", node=node)
 
-    def remove_node(self, node, terminate=True):
+    def remove_node(self, node, terminate=True, force=False):
         """
         Remove a single node from this cluster
         """
-        return self.remove_nodes([node], terminate=terminate)
+        return self.remove_nodes([node], terminate=terminate, force=force)
 
-    def remove_nodes(self, nodes, terminate=True):
+    def remove_nodes(self, nodes, terminate=True, force=False):
         """
         Remove a list of nodes from this cluster
         """
         for node in nodes:
             if node.is_master():
                 raise exception.InvalidOperation("cannot remove master node")
-            self.run_plugins(method_name="on_remove_node",
-                             node=node, reverse=True)
+            try:
+                self.run_plugins(method_name="on_remove_node",
+                                node=node, reverse=True)
+            except:
+                if not force:
+                    raise
             if not terminate:
                 continue
             node.terminate()
