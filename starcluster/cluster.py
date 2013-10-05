@@ -176,8 +176,10 @@ class ClusterManager(managers.Manager):
 
     def add_node(self, cluster_name, dns_prefix, alias=None, no_create=False,
                  image_id=None, instance_type=None, zone=None,
-                 placement_group=None, spot_bid=None):
-        cl = self.get_cluster(cluster_name)
+                 placement_group=None, spot_bid=None, template=None):
+        if not template:
+            template = self.get_default_cluster_template()
+        cl = self.get_cluster_template(template, cluster_name)
         if dns_prefix:
             cl.dns_prefix = cluster_name
         return cl.add_node(alias=alias, image_id=image_id,
@@ -188,11 +190,13 @@ class ClusterManager(managers.Manager):
     def add_nodes(self, cluster_name, num_nodes, dns_prefix, aliases=None,
                   no_create=False,
                   image_id=None, instance_type=None, zone=None,
-                  placement_group=None, spot_bid=None):
+                  placement_group=None, spot_bid=None, template=None):
         """
         Add one or more nodes to cluster
         """
-        cl = self.get_cluster(cluster_name)
+        if not template:
+            template = self.get_default_cluster_template()
+        cl = self.get_cluster_template(template, cluster_name)
         if dns_prefix:
             cl.dns_prefix = cluster_name
         return cl.add_nodes(num_nodes, aliases=aliases, image_id=image_id,
@@ -200,11 +204,13 @@ class ClusterManager(managers.Manager):
                             placement_group=placement_group, spot_bid=spot_bid,
                             no_create=no_create)
 
-    def remove_node(self, cluster_name, alias, terminate=True):
+    def remove_node(self, cluster_name, alias, terminate=True, template=None):
         """
         Remove a single node from a cluster
         """
-        cl = self.get_cluster(cluster_name)
+        if not template:
+            template = self.get_default_cluster_template()
+        cl = self.get_cluster_template(template, cluster_name)
         n = cl.get_node_by_alias(alias)
         if not n:
             raise exception.InstanceDoesNotExist(alias, label='node')
