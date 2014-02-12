@@ -14,7 +14,6 @@
 #
 # You should have received a copy of the GNU Lesser General Public License
 # along with StarCluster. If not, see <http://www.gnu.org/licenses/>.
-
 """
 A starcluster plugin for running an IPython cluster
 (requires IPython 0.13+)
@@ -86,7 +85,7 @@ def _kill_cmd(iptype, keepalive_cluster_ids=(), tokill_cluster_ids=()):
     cmd = ('comm {cols} <(pgrep -f "{iptype}.* --cluster-id {tokill}" | sort)'
            ' <(pgrep -f "{iptype}.* --cluster-id {keepalive}" | sort)'
            ' | xargs --no-run-if-empty kill').format(
-               cols=cols, iptype=iptype, keepalive=keepalive, tokill=tokill)
+        cols=cols, iptype=iptype, keepalive=keepalive, tokill=tokill)
     return cmd
 
 
@@ -126,6 +125,7 @@ def _str_to_kls(kls_string):
 
 
 class ClusterID(object):
+
     """This class defines the default strategy for
       - identifying the current cluster id
       - identifying active cluster ids that should not be killed
@@ -162,13 +162,14 @@ class ClusterID(object):
         return []
 
     @classmethod
-    def new(self):
+    def new(self, master, user):
         """ Create a new cluster-id """
         cluster_id = ''.join(chr(random.randint(97, 122)) for x in range(4))
         return cluster_id
 
 
 class IPCluster(DefaultClusterSetup):
+
     """Start an IPython (>= 0.13) cluster
 
     Example config:
@@ -305,7 +306,8 @@ class IPCluster(DefaultClusterSetup):
         finally:
             s.stop()
         # copy to ipcontroller-client.json for backwards compatibility
-        json_copy = os.path.join(profile_dir, 'security', 'ipcontroller-client.json')
+        json_copy = os.path.join(
+            profile_dir, 'security', 'ipcontroller-client.json')
         master.ssh.execute(('test -e {sym} && rm {sym}'
                             ' ; cp {json} {sym} ; touch {json}')
                            .format(sym=json_copy, json=json_filename))
@@ -389,21 +391,22 @@ class IPCluster(DefaultClusterSetup):
             port_min, port_max = port
         else:
             port_min, port_max = port, port
-        port_open = node.ec2.has_permission(group, protocol, port_min,
-                                            port_max, world_cidr)
+        # hacky workaround: check that it isn't already open to everything
+        port_open = node.ec2.has_permission(
+            group, protocol, 1, 65535, world_cidr)
+        port_open = port_open or node.ec2.has_permission(
+            group, protocol, port_min, port_max, world_cidr)
         if not port_open:
             log.info("Authorizing tcp ports [%s-%s] on %s for: %s" %
                      (port_min, port_max, world_cidr, service_name))
-            node.ec2.conn.authorize_security_group(
-                group_id=group.id, ip_protocol='tcp', from_port=port_min,
-                to_port=port_max, cidr_ip=world_cidr)
+            group.authorize('tcp', port_min, port_max, world_cidr)
 
     @print_timing("IPCluster")
     def run(self, nodes, master, user, user_shell, volumes):
         self._check_ipython_installed(master)
         user_home = master.getpwnam(user).pw_dir
         profile_dir = posixpath.join(user_home, '.ipython', 'profile_default')
-        cluster_id = self.cluster_id_kls.new()
+        cluster_id = self.cluster_id_kls.new(master, user)
         log.info('Using new cluster-id: %s' % cluster_id)
         master.ssh.switch_user(user)
         self._write_config(master, user, profile_dir, cluster_id)
@@ -445,6 +448,7 @@ class IPCluster(DefaultClusterSetup):
 
 
 class IPClusterStop(DefaultClusterSetup):
+
     """Shutdown all the IPython processes of the cluster that are not marked as
     "active" by cluster_id_kls.active
 
@@ -495,6 +499,7 @@ class IPClusterStop(DefaultClusterSetup):
 
 
 class IPClusterRestartEngines(DefaultClusterSetup):
+
     """Plugin to kill and restart all engines of the current IPython cluster
 
     This plugin can be useful to hard-reset all the engines, for instance
